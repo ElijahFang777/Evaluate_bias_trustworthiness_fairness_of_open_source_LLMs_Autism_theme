@@ -1,0 +1,33 @@
+# requirements.txt
+# Reproducibility dependencies for the ASC trustworthiness evaluation project.
+#
+# Recommended:
+# 1. Install a CUDA-compatible PyTorch build first if you plan to use GPU.
+# 2. Then install the rest with:
+#      pip install -r requirements.txt
+#
+# Example for NVIDIA GPU users:
+#   pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu121
+#
+# If PyTorch is already installed correctly for your system, this file will
+# install the remaining project dependencies.
+
+numpy==1.26.4
+pandas==2.2.2
+requests==2.32.3
+matplotlib==3.9.0
+
+# Notebook / interactive analysis
+jupyter==1.1.1
+notebook==7.2.1
+ipykernel==6.29.5
+
+# Toxicity scoring
+detoxify==0.5.2
+
+# Core deep learning dependency used by Detoxify
+# Leave torch flexible here because the correct build depends on CUDA / OS.
+torch>=2.2.0
+
+# Optional but useful for environment stability in some notebook setups
+packaging==24.1
