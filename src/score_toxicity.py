@@ -9,12 +9,7 @@ Designed for:
 - outputs/raw_generations.jsonl  (from generate.py)
 
 Example:
-    python src/score_toxicity.py \
-        --input outputs/raw_generations.jsonl \
-        --output outputs/toxicity_scores.csv \
-        --model-name unbiased \
-        --device auto \
-        --batch-size 32
+    python src/score_toxicity.py
 
 Notes:
 - The default Detoxify model is "unbiased".
@@ -31,25 +26,16 @@ import sys
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
-import pandas as pd
-
-try:
-    import torch
-except ImportError as exc:
-    raise SystemExit(
-        "PyTorch is required for score_toxicity.py. "
-        "Install it before running this script."
-    ) from exc
-
-try:
-    from detoxify import Detoxify
-except ImportError as exc:
-    raise SystemExit(
-        "Detoxify is not installed. Install it with:\n"
-        "    pip install detoxify\n"
-        "and make sure PyTorch is available."
-    ) from exc
-
+from project_config import (
+    DEFAULT_TOXICITY_BATCH_SIZE,
+    DEFAULT_TOXICITY_DEVICE,
+    DEFAULT_TOXICITY_MODEL,
+    RAW_GENERATIONS_PATH,
+    TOXICITY_SCORES_PATH,
+    as_cli_path,
+    resolve_input_path,
+    resolve_output_path,
+)
 
 DEFAULT_METADATA_COLUMNS = [
     "response_id",
@@ -86,29 +72,29 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument(
         "--input",
-        required=True,
+        default=as_cli_path(RAW_GENERATIONS_PATH),
         help="Input JSONL file containing generated responses.",
     )
     parser.add_argument(
         "--output",
-        required=True,
+        default=as_cli_path(TOXICITY_SCORES_PATH),
         help="Output CSV path for toxicity scores.",
     )
     parser.add_argument(
         "--model-name",
-        default="unbiased",
+        default=DEFAULT_TOXICITY_MODEL,
         choices=["original", "unbiased", "multilingual", "original-small", "unbiased-small"],
         help="Detoxify model name.",
     )
     parser.add_argument(
         "--device",
-        default="auto",
+        default=DEFAULT_TOXICITY_DEVICE,
         help="Device for Detoxify: auto, cpu, cuda, cuda:0, etc.",
     )
     parser.add_argument(
         "--batch-size",
         type=int,
-        default=32,
+        default=DEFAULT_TOXICITY_BATCH_SIZE,
         help="Number of texts to score per batch.",
     )
     parser.add_argument(
@@ -135,10 +121,44 @@ def parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
-def resolve_device(device_arg: str) -> str:
+def import_pandas():
+    try:
+        import pandas as pd
+    except ImportError as exc:
+        raise SystemExit(
+            "pandas is required for score_toxicity.py. Install project dependencies with:\n"
+            "    pip install -r requirements.txt"
+        ) from exc
+    return pd
+
+
+def import_torch():
+    try:
+        import torch
+    except ImportError as exc:
+        raise SystemExit(
+            "PyTorch is required for score_toxicity.py. "
+            "Install it before running this script."
+        ) from exc
+    return torch
+
+
+def import_detoxify():
+    try:
+        from detoxify import Detoxify
+    except ImportError as exc:
+        raise SystemExit(
+            "Detoxify is not installed. Install project dependencies with:\n"
+            "    pip install -r requirements.txt\n"
+            "and make sure PyTorch is available."
+        ) from exc
+    return Detoxify
+
+
+def resolve_device(device_arg: str, torch_module: Any) -> str:
     if device_arg != "auto":
         return device_arg
-    return "cuda" if torch.cuda.is_available() else "cpu"
+    return "cuda" if torch_module.cuda.is_available() else "cpu"
 
 
 def read_jsonl(path: Path) -> List[Dict[str, Any]]:
@@ -167,7 +187,7 @@ def normalize_text(text: Any, max_chars: Optional[int]) -> str:
 
 
 def batch_predict(
-    model: Detoxify,
+    model: Any,
     texts: List[str],
     batch_size: int,
 ) -> List[Dict[str, Optional[float]]]:
@@ -205,9 +225,12 @@ def batch_predict(
 
 def main() -> int:
     args = parse_args()
+    pd = import_pandas()
+    torch = import_torch()
+    Detoxify = import_detoxify()
 
-    input_path = Path(args.input)
-    output_path = Path(args.output)
+    input_path = resolve_input_path(args.input)
+    output_path = resolve_output_path(args.output)
 
     if not input_path.exists():
         print(f"[error] Input file does not exist: {input_path}", file=sys.stderr)
@@ -218,7 +241,7 @@ def main() -> int:
         print(f"[error] No records found in {input_path}", file=sys.stderr)
         return 1
 
-    device = resolve_device(args.device)
+    device = resolve_device(args.device, torch)
 
     if args.verbose:
         print(f"[info] Loaded {len(records)} records from {input_path}")

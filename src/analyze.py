@@ -24,16 +24,7 @@ This script:
 4. Adds fairness-gap summaries from pairwise_differences.csv where possible.
 
 Example:
-    python src/analyze.py \
-        --generations outputs/raw_generations.jsonl \
-        --toxicity outputs/toxicity_scores.csv \
-        --manual-review outputs/manual_review_completed.csv \
-        --fairness outputs/fairness_metrics.csv \
-        --pairs outputs/pairwise_differences.csv \
-        --out-master outputs/results_master.csv \
-        --out-model outputs/summary_by_model.csv \
-        --out-context outputs/summary_by_context.csv \
-        --out-dimension outputs/summary_by_dimension.csv
+    python src/analyze.py
 """
 
 from __future__ import annotations
@@ -44,7 +35,22 @@ import sys
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Sequence
 
-import pandas as pd
+from project_config import (
+    FAIRNESS_METRICS_PATH,
+    MANUAL_REVIEW_COMPLETED_PATH,
+    PAIRWISE_DIFFERENCES_PATH,
+    RAW_GENERATIONS_PATH,
+    RESULTS_MASTER_PATH,
+    SUMMARY_BY_CONTEXT_PATH,
+    SUMMARY_BY_DIMENSION_PATH,
+    SUMMARY_BY_MODEL_PATH,
+    TOXICITY_SCORES_PATH,
+    as_cli_path,
+    resolve_input_path,
+    resolve_output_path,
+)
+
+pd = None
 
 
 DEFAULT_TOXICITY_COLS = [
@@ -133,17 +139,31 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description="Aggregate generation, scoring, and fairness results."
     )
-    parser.add_argument("--generations", required=True, help="JSONL output from generate.py")
-    parser.add_argument("--toxicity", required=True, help="CSV output from score_toxicity.py")
-    parser.add_argument("--manual-review", required=True, help="Completed manual review CSV")
-    parser.add_argument("--fairness", required=True, help="CSV output from score_fairness.py (fairness_metrics.csv)")
-    parser.add_argument("--pairs", required=True, help="CSV output from score_fairness.py (pairwise_differences.csv)")
-    parser.add_argument("--out-master", required=True, help="Output CSV for merged row-level results")
-    parser.add_argument("--out-model", required=True, help="Output CSV for model-level summary")
-    parser.add_argument("--out-context", required=True, help="Output CSV for context-level summary")
-    parser.add_argument("--out-dimension", required=True, help="Output CSV for dimension-level summary")
+    parser.add_argument("--generations", default=as_cli_path(RAW_GENERATIONS_PATH), help="JSONL output from generate.py")
+    parser.add_argument("--toxicity", default=as_cli_path(TOXICITY_SCORES_PATH), help="CSV output from score_toxicity.py")
+    parser.add_argument("--manual-review", default=as_cli_path(MANUAL_REVIEW_COMPLETED_PATH), help="Completed manual review CSV")
+    parser.add_argument("--fairness", default=as_cli_path(FAIRNESS_METRICS_PATH), help="CSV output from score_fairness.py (fairness_metrics.csv)")
+    parser.add_argument("--pairs", default=as_cli_path(PAIRWISE_DIFFERENCES_PATH), help="CSV output from score_fairness.py (pairwise_differences.csv)")
+    parser.add_argument("--out-master", default=as_cli_path(RESULTS_MASTER_PATH), help="Output CSV for merged row-level results")
+    parser.add_argument("--out-model", default=as_cli_path(SUMMARY_BY_MODEL_PATH), help="Output CSV for model-level summary")
+    parser.add_argument("--out-context", default=as_cli_path(SUMMARY_BY_CONTEXT_PATH), help="Output CSV for context-level summary")
+    parser.add_argument("--out-dimension", default=as_cli_path(SUMMARY_BY_DIMENSION_PATH), help="Output CSV for dimension-level summary")
     parser.add_argument("--verbose", action="store_true", help="Print progress details")
     return parser.parse_args()
+
+
+def import_pandas():
+    global pd
+    if pd is not None:
+        return pd
+    try:
+        import pandas as pd
+    except ImportError as exc:
+        raise SystemExit(
+            "pandas is required for analyze.py. Install project dependencies with:\n"
+            "    pip install -r requirements.txt"
+        ) from exc
+    return pd
 
 
 def read_jsonl(path: Path) -> List[Dict[str, Any]]:
@@ -468,13 +488,14 @@ def merge_fairness_context(summary_context: pd.DataFrame, pair_gap_summary: pd.D
 
 def main() -> int:
     args = parse_args()
+    pd = import_pandas()
 
     try:
-        generations = load_generations(Path(args.generations))
-        toxicity = load_csv(Path(args.toxicity))
-        manual = load_csv(Path(args.manual_review))
-        fairness = load_csv(Path(args.fairness))
-        pairs = load_csv(Path(args.pairs))
+        generations = load_generations(resolve_input_path(args.generations))
+        toxicity = load_csv(resolve_input_path(args.toxicity))
+        manual = load_csv(resolve_input_path(args.manual_review))
+        fairness = load_csv(resolve_input_path(args.fairness))
+        pairs = load_csv(resolve_input_path(args.pairs))
     except Exception as exc:
         print(f"[error] Failed to load inputs: {exc}", file=sys.stderr)
         return 1
@@ -513,10 +534,10 @@ def main() -> int:
         summary_by_model = summary_by_model.merge(model_gap_df, on="model", how="left")
 
     # Save outputs.
-    out_master = Path(args.out_master)
-    out_model = Path(args.out_model)
-    out_context = Path(args.out_context)
-    out_dimension = Path(args.out_dimension)
+    out_master = resolve_output_path(args.out_master)
+    out_model = resolve_output_path(args.out_model)
+    out_context = resolve_output_path(args.out_context)
+    out_dimension = resolve_output_path(args.out_dimension)
 
     for path in [out_master, out_model, out_context, out_dimension]:
         path.parent.mkdir(parents=True, exist_ok=True)

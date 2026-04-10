@@ -19,12 +19,7 @@ This script is designed for the prompt schema used in prompts_asc.jsonl, where:
 - target_group is typically "autistic" or "neurotypical"
 
 Example:
-    python src/score_fairness.py \
-        --generations outputs/raw_generations.jsonl \
-        --toxicity outputs/toxicity_scores.csv \
-        --manual-review outputs/manual_review_completed.csv \
-        --out-metrics outputs/fairness_metrics.csv \
-        --out-pairs outputs/pairwise_differences.csv
+    python src/score_fairness.py
 """
 
 from __future__ import annotations
@@ -36,7 +31,19 @@ import sys
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional, Sequence
 
-import pandas as pd
+from project_config import (
+    DEFAULT_TARGET_GROUPS,
+    FAIRNESS_METRICS_PATH,
+    MANUAL_REVIEW_COMPLETED_PATH,
+    PAIRWISE_DIFFERENCES_PATH,
+    RAW_GENERATIONS_PATH,
+    TOXICITY_SCORES_PATH,
+    as_cli_path,
+    resolve_input_path,
+    resolve_output_path,
+)
+
+pd = None
 
 
 def parse_args() -> argparse.Namespace:
@@ -45,27 +52,27 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument(
         "--generations",
-        required=True,
+        default=as_cli_path(RAW_GENERATIONS_PATH),
         help="JSONL output from generate.py",
     )
     parser.add_argument(
         "--toxicity",
-        required=True,
+        default=as_cli_path(TOXICITY_SCORES_PATH),
         help="CSV output from score_toxicity.py",
     )
     parser.add_argument(
         "--manual-review",
-        required=True,
+        default=as_cli_path(MANUAL_REVIEW_COMPLETED_PATH),
         help="Completed manual review CSV.",
     )
     parser.add_argument(
         "--out-metrics",
-        required=True,
+        default=as_cli_path(FAIRNESS_METRICS_PATH),
         help="Output CSV for aggregated fairness metrics.",
     )
     parser.add_argument(
         "--out-pairs",
-        required=True,
+        default=as_cli_path(PAIRWISE_DIFFERENCES_PATH),
         help="Output CSV for pairwise autistic-vs-neurotypical differences.",
     )
     parser.add_argument(
@@ -76,7 +83,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--target-groups",
         nargs=2,
-        default=["autistic", "neurotypical"],
+        default=list(DEFAULT_TARGET_GROUPS),
         help="Exactly two target groups to compare, in subtraction order for pairwise differences.",
     )
     parser.add_argument(
@@ -85,6 +92,20 @@ def parse_args() -> argparse.Namespace:
         help="Print progress information.",
     )
     return parser.parse_args()
+
+
+def import_pandas():
+    global pd
+    if pd is not None:
+        return pd
+    try:
+        import pandas as pd
+    except ImportError as exc:
+        raise SystemExit(
+            "pandas is required for score_fairness.py. Install project dependencies with:\n"
+            "    pip install -r requirements.txt"
+        ) from exc
+    return pd
 
 
 def read_jsonl(path: Path) -> List[Dict[str, Any]]:
@@ -458,13 +479,14 @@ def build_fairness_summary_from_pairs(
 
 def main() -> int:
     args = parse_args()
+    pd = import_pandas()
 
     group_a, group_b = args.target_groups
-    generations_path = Path(args.generations)
-    toxicity_path = Path(args.toxicity)
-    manual_path = Path(args.manual_review)
-    out_metrics_path = Path(args.out_metrics)
-    out_pairs_path = Path(args.out_pairs)
+    generations_path = resolve_input_path(args.generations)
+    toxicity_path = resolve_input_path(args.toxicity)
+    manual_path = resolve_input_path(args.manual_review)
+    out_metrics_path = resolve_output_path(args.out_metrics)
+    out_pairs_path = resolve_output_path(args.out_pairs)
 
     try:
         generations = load_generations(generations_path)

@@ -17,20 +17,14 @@ Designed for:
 - outputs/raw_generations.jsonl  (from generate.py)
 
 Example:
-    python src/factuality_review_template.py \
-        --input outputs/raw_generations.jsonl \
-        --output outputs/manual_review_template.csv
+    python src/factuality_review_template.py
 
 Example including controls:
     python src/factuality_review_template.py \
-        --input outputs/raw_generations.jsonl \
-        --output outputs/manual_review_template.csv \
         --include-controls
 
 Example focusing only on high-risk rows:
     python src/factuality_review_template.py \
-        --input outputs/raw_generations.jsonl \
-        --output outputs/manual_review_template.csv \
         --mode highrisk
 """
 
@@ -43,7 +37,18 @@ import sys
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional, Sequence, Set
 
-import pandas as pd
+from project_config import (
+    DEFAULT_REVIEW_MODE,
+    DEFAULT_REVIEW_SORT_BY,
+    DEFAULT_SAMPLE_SEED,
+    MANUAL_REVIEW_TEMPLATE_PATH,
+    RAW_GENERATIONS_PATH,
+    as_cli_path,
+    resolve_input_path,
+    resolve_output_path,
+)
+
+pd = None
 
 
 DEFAULT_REVIEW_COLUMNS = [
@@ -66,17 +71,17 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument(
         "--input",
-        required=True,
+        default=as_cli_path(RAW_GENERATIONS_PATH),
         help="Input JSONL file from generate.py.",
     )
     parser.add_argument(
         "--output",
-        required=True,
+        default=as_cli_path(MANUAL_REVIEW_TEMPLATE_PATH),
         help="Output CSV path for manual review.",
     )
     parser.add_argument(
         "--mode",
-        default="core",
+        default=DEFAULT_REVIEW_MODE,
         choices=sorted(VALID_MODES),
         help=(
             "Selection mode: "
@@ -104,12 +109,12 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--sample-seed",
         type=int,
-        default=42,
+        default=DEFAULT_SAMPLE_SEED,
         help="Random seed used when max-rows sampling is applied.",
     )
     parser.add_argument(
         "--sort-by",
-        default="model,context,item_id,seed",
+        default=DEFAULT_REVIEW_SORT_BY,
         help="Comma-separated sort columns for the final CSV.",
     )
     parser.add_argument(
@@ -118,6 +123,20 @@ def parse_args() -> argparse.Namespace:
         help="Ignore raw_api_response if present when preserving extra columns.",
     )
     return parser.parse_args()
+
+
+def import_pandas():
+    global pd
+    if pd is not None:
+        return pd
+    try:
+        import pandas as pd
+    except ImportError as exc:
+        raise SystemExit(
+            "pandas is required for factuality_review_template.py. Install project dependencies with:\n"
+            "    pip install -r requirements.txt"
+        ) from exc
+    return pd
 
 
 def read_jsonl(path: Path) -> List[Dict[str, Any]]:
@@ -279,9 +298,10 @@ def sort_dataframe(df: pd.DataFrame, sort_by: str) -> pd.DataFrame:
 
 def main() -> int:
     args = parse_args()
+    pd = import_pandas()
 
-    input_path = Path(args.input)
-    output_path = Path(args.output)
+    input_path = resolve_input_path(args.input)
+    output_path = resolve_output_path(args.output)
 
     if not input_path.exists():
         print(f"[error] Input file does not exist: {input_path}", file=sys.stderr)

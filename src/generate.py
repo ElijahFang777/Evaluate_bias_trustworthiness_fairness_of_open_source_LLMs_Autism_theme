@@ -10,18 +10,11 @@ Designed for:
 - data/prompts_controls.jsonl
 
 Example:
-    python src/generate.py \
-        --prompts data/prompts_asc.jsonl \
-        --models llama3.1:8b mistral:7b qwen2.5:7b \
-        --out outputs/raw_generations.jsonl \
-        --seeds 42 43
+    python src/generate.py
 
     python src/generate.py \
-        --prompts data/prompts_controls.jsonl \
-        --models llama3.1:8b mistral:7b qwen2.5:7b \
-        --out outputs/raw_generations.jsonl \
-        --append \
-        --seeds 42
+        --prompt-set controls \
+        --append
 """
 
 from __future__ import annotations
@@ -29,7 +22,6 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
-import os
 import sys
 import time
 from pathlib import Path
@@ -37,26 +29,53 @@ from typing import Any, Dict, Iterable, List, Optional, Set, Tuple
 
 import requests
 
+from project_config import (
+    DEFAULT_MAX_TOKENS,
+    DEFAULT_MODELS,
+    DEFAULT_OPENAI_API_KEY,
+    DEFAULT_OPENAI_BASE_URL,
+    DEFAULT_PROMPT_SET,
+    DEFAULT_RETRIES,
+    DEFAULT_RETRY_BACKOFF,
+    DEFAULT_SLEEP,
+    DEFAULT_SYSTEM_PROMPT,
+    DEFAULT_TEMPERATURE,
+    DEFAULT_TIMEOUT,
+    DEFAULT_TOP_P,
+    PROMPT_SET_FILES,
+    RAW_GENERATIONS_PATH,
+    as_cli_path,
+    generation_seeds_for_set,
+    prompt_files_for_set,
+    resolve_input_path,
+    resolve_output_path,
+)
+
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description="Generate model outputs for JSONL prompt datasets."
     )
     parser.add_argument(
+        "--prompt-set",
+        choices=sorted(PROMPT_SET_FILES),
+        default=DEFAULT_PROMPT_SET,
+        help="Named prompt set from project_config.py. Ignored if --prompts is provided.",
+    )
+    parser.add_argument(
         "--prompts",
         nargs="+",
-        required=True,
-        help="One or more JSONL prompt files.",
+        help="One or more JSONL prompt files. Defaults to the configured prompt set.",
     )
     parser.add_argument(
         "--models",
         nargs="+",
-        required=True,
+        default=list(DEFAULT_MODELS),
         help="One or more model names to query.",
     )
     parser.add_argument(
         "--out",
-        required=True,
+        default=as_cli_path(RAW_GENERATIONS_PATH),
         help="Output JSONL file to write generated responses to.",
     )
     parser.add_argument(
@@ -66,66 +85,65 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument(
         "--base-url",
-        default=os.environ.get("OPENAI_BASE_URL", "http://localhost:11434/v1"),
+        default=DEFAULT_OPENAI_BASE_URL,
         help="Base URL for the OpenAI-compatible API.",
     )
     parser.add_argument(
         "--api-key",
-        default=os.environ.get("OPENAI_API_KEY", "ollama"),
+        default=DEFAULT_OPENAI_API_KEY,
         help="API key for the endpoint. Ollama usually ignores this.",
     )
     parser.add_argument(
         "--system-prompt",
-        default="You are a helpful assistant.",
+        default=DEFAULT_SYSTEM_PROMPT,
         help="System prompt sent with every request.",
     )
     parser.add_argument(
         "--temperature",
         type=float,
-        default=0.2,
+        default=DEFAULT_TEMPERATURE,
         help="Sampling temperature.",
     )
     parser.add_argument(
         "--top-p",
         type=float,
-        default=0.9,
+        default=DEFAULT_TOP_P,
         help="Top-p sampling value.",
     )
     parser.add_argument(
         "--max-tokens",
         type=int,
-        default=256,
+        default=DEFAULT_MAX_TOKENS,
         help="Maximum output tokens.",
     )
     parser.add_argument(
         "--seeds",
         nargs="+",
         type=int,
-        default=[42],
-        help="One or more integer seeds.",
+        help="One or more integer seeds. Defaults come from project_config.py.",
     )
     parser.add_argument(
         "--timeout",
         type=int,
-        default=300,
+        default=DEFAULT_TIMEOUT,
         help="Request timeout in seconds.",
     )
     parser.add_argument(
         "--retries",
         type=int,
-        default=3,
+        default=DEFAULT_RETRIES,
         help="Number of retries per failed request.",
     )
     parser.add_argument(
         "--retry-backoff",
         type=float,
-        default=2.0,
+        default=DEFAULT_RETRY_BACKOFF,
         help="Base retry backoff in seconds.",
     )
     parser.add_argument(
         "--sleep",
         type=float,
-        default=0.0,
+        default=DEFAULT_SLEEP,
         help="Optional delay between successful requests.",
     )
     parser.add_argument(
@@ -179,9 +197,25 @@ def load_existing_ids(path: Path) -> Set[str]:
             except json.JSONDecodeError:
                 continue
             response_id = obj.get("response_id")
-            if response_id:
+            error_text = str(obj.get("error", "") or "").strip()
+            if response_id and not error_text:
                 ids.add(response_id)
     return ids
+
+
+def check_api_available(base_url: str, api_key: str, timeout: int) -> Tuple[bool, str]:
+    base_url = base_url.rstrip("/")
+    url = f"{base_url}/models"
+    headers = {
+        "Authorization": f"Bearer {api_key}",
+        "Content-Type": "application/json",
+    }
+    try:
+        response = requests.get(url, headers=headers, timeout=timeout)
+        response.raise_for_status()
+        return True, url
+    except Exception as exc:
+        return False, f"{url} ({exc})"
 
 
 def normalize_prompt_record(
@@ -350,8 +384,18 @@ def iter_jobs(
 def main() -> int:
     args = parse_args()
 
-    prompt_files = [Path(p) for p in args.prompts]
-    out_path = Path(args.out)
+    prompt_sources = args.prompts or [as_cli_path(path) for path in prompt_files_for_set(args.prompt_set)]
+    prompt_files = [resolve_input_path(p) for p in prompt_sources]
+    out_path = resolve_output_path(args.out)
+    seeds = args.seeds if args.seeds is not None else generation_seeds_for_set(args.prompt_set)
+
+    missing_prompt_files = [str(path) for path in prompt_files if not path.exists()]
+    if missing_prompt_files:
+        print(
+            "[error] Missing prompt file(s): " + ", ".join(missing_prompt_files),
+            file=sys.stderr,
+        )
+        return 1
 
     if not args.append and out_path.exists():
         print(
@@ -363,12 +407,15 @@ def main() -> int:
 
     existing_ids: Set[str] = load_existing_ids(out_path) if args.append else set()
 
-    jobs = list(iter_jobs(prompt_files, args.models, args.seeds, args.limit))
+    jobs = list(iter_jobs(prompt_files, args.models, seeds, args.limit))
     total_jobs = len(jobs)
 
     print(f"[info] Loaded {len(prompt_files)} prompt file(s).")
     print(f"[info] Planned request count: {total_jobs}")
     print(f"[info] Output file: {out_path}")
+    print(f"[info] Seeds: {seeds}")
+    if args.append:
+        print(f"[info] Existing successful responses to skip: {len(existing_ids)}")
 
     if args.dry_run:
         preview = min(5, total_jobs)
@@ -386,6 +433,23 @@ def main() -> int:
                 f"item_id={rec['item_id']} | model={model} | seed={seed}"
             )
         return 0
+
+    ok, detail = check_api_available(
+        base_url=args.base_url,
+        api_key=args.api_key,
+        timeout=args.timeout,
+    )
+    if not ok:
+        print(
+            "[error] OpenAI-compatible API is not reachable. "
+            f"Expected endpoint: {args.base_url.rstrip('/')}/chat/completions\n"
+            f"[error] Health check failed at: {detail}\n"
+            "[hint] If you are using Ollama, start it with `ollama serve` and make sure "
+            "the models are pulled. If your server is elsewhere, set OPENAI_BASE_URL or "
+            "pass --base-url.",
+            file=sys.stderr,
+        )
+        return 1
 
     completed = 0
     skipped = 0

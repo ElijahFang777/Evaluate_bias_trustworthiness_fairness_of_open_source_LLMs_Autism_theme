@@ -101,7 +101,7 @@ Typical setup:
 ```bash
 ollama serve
 ollama pull llama3.1:8b
-ollama pull mistral:7b
+ollama pull deepseek-r1:8b
 ollama pull qwen2.5:7b
 ```
 
@@ -164,48 +164,45 @@ Each line is one JSON object with fields such as:
 
 Run the project in this order.
 
+Global defaults for paths, models, and seeds now live in:
+
+```text
+src/project_config.py
+```
+
+Edit that file once when you want to change shared settings such as:
+- output directories
+- default models
+- default seeds
+- default prompt set
+- API endpoint defaults
+
 ### Step 1: Generate responses
 
 ASC prompts:
 
 ```bash
-python src/generate.py \
-  --prompts data/prompts_asc.jsonl \
-  --models llama3.1:8b mistral:7b qwen2.5:7b \
-  --out outputs/raw_generations.jsonl \
-  --seeds 42 43
+python src/generate.py
 ```
 
 Control prompts:
 
 ```bash
 python src/generate.py \
-  --prompts data/prompts_controls.jsonl \
-  --models llama3.1:8b mistral:7b qwen2.5:7b \
-  --out outputs/raw_generations.jsonl \
-  --append \
-  --seeds 42
+  --prompt-set controls \
+  --append
 ```
 
 ### Step 2: Score toxicity
 
 ```bash
-python src/score_toxicity.py \
-  --input outputs/raw_generations.jsonl \
-  --output outputs/toxicity_scores.csv \
-  --model-name unbiased \
-  --device auto \
-  --batch-size 32 \
-  --verbose
+python src/score_toxicity.py --verbose
 ```
 
 ### Step 3: Export manual review template
 
 ```bash
-python src/factuality_review_template.py \
-  --input outputs/raw_generations.jsonl \
-  --output outputs/manual_review_template.csv \
-  --include-controls
+python src/factuality_review_template.py --include-controls
 ```
 
 ### Step 4: Manually review and save completed file
@@ -229,29 +226,13 @@ This file should preserve the exported rows and fill the annotation columns:
 ### Step 5: Compute fairness metrics
 
 ```bash
-python src/score_fairness.py \
-  --generations outputs/raw_generations.jsonl \
-  --toxicity outputs/toxicity_scores.csv \
-  --manual-review outputs/manual_review_completed.csv \
-  --out-metrics outputs/fairness_metrics.csv \
-  --out-pairs outputs/pairwise_differences.csv \
-  --verbose
+python src/score_fairness.py --verbose
 ```
 
 ### Step 6: Aggregate analysis tables
 
 ```bash
-python src/analyze.py \
-  --generations outputs/raw_generations.jsonl \
-  --toxicity outputs/toxicity_scores.csv \
-  --manual-review outputs/manual_review_completed.csv \
-  --fairness outputs/fairness_metrics.csv \
-  --pairs outputs/pairwise_differences.csv \
-  --out-master outputs/results_master.csv \
-  --out-model outputs/summary_by_model.csv \
-  --out-context outputs/summary_by_context.csv \
-  --out-dimension outputs/summary_by_dimension.csv \
-  --verbose
+python src/analyze.py --verbose
 ```
 
 ### Step 7: Plot results
